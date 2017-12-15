@@ -1,0 +1,267 @@
+---
+title: 'An Exploratory Analysis of Refugee Statistics'
+author: "Bentley Schieckoff and Carlo Didonè"
+date: '2017-12-14'
+output:
+  pdf_document: default
+  word_document: default
+  html_document:
+    df_print: paged
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+
+library(tidyverse)
+library(dplyr)
+library(stringr)
+library(lubridate)
+library(plotly)
+
+```
+
+## Introduction
+
+In the past few years, migration has been front-and-centre in international politics. Highlighted by the European refugee crisis in 2015, people are fleeing their homelands now more than ever in search of a better life. Using data from the United Nations Refugee Agency (otherwise known as the UNHCR), we will examine global refugee flows over the past few decades. Furthermore, we will explore the relationship between UN assistance for asylum applicants and the number of minor refugee applicants. The paper will have the following structure:
+
+I. Data Cleaning  
+II. Exploratory Data Analysis  
+III. Empirical Analysis  
+IV. Discussion and Conclusion  
+
+##I. Data Cleaning
+
+The data provided by the UNHCR can be freely downloaded from their website in comma separated variable form. The tables we chose to work with are: Asylum-Seekers, Time Series and Demographics. This data was not immediately ready to be worked with, since often the "class" of the data did not match the type of data and the variable names are inconvenient to work with. After loading these tables into R, our first task was to rename the variables, drop any unnecessary columns, and coerce the data into "numeric", "date" and "character" classes as appropriate. 
+
+One variable that was difficult to deal with was in the Demographics table. This data was broken down into different age groups, for instance 5-17 years old. Some countries entered their data under this variable, while others had it split into sub-groups (5-11 and 12-17). To solve this problem, we had to create a new variable that summed the observations across these three columns. This created a common measure, since countries either entered their data in the 5-17 column or split it into the sub-groups.  
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+#loading data "Asylum-Seekers"
+dat_asylum_seekers <- read.csv("unhcr_asylum_seekers.csv", skip= 3)
+
+#renaming variables
+names(dat_asylum_seekers) <- c("Year", "COUNTRY", "ocountry", "procedtype", "pendingstart", "UNassisted", "appduring", "decrecog", "decother", "rejected", "otherclosed", "totdec", "pendingend", "totUNassisted")
+
+#coercing the data into numeric class
+dat_as_numeric <- dat_asylum_seekers %>% 
+  transform(pendingstart= as.numeric(pendingstart), UNassisted= as.numeric(UNassisted), appduring= as.numeric(appduring), decrecog= as.numeric(decrecog), rejected= as.numeric(rejected), otherclosed= as.numeric(otherclosed), totdec= as.numeric(totdec), pendingend= as.numeric(pendingend), totUNassisted= as.numeric(totUNassisted))
+
+#loading data Time Series
+dat_ts <- read.csv("unhcr_time_series.csv", skip= 3)
+names(dat_ts) <- c("year", "COR", "origin", "pop", "Value") 
+
+#changing the value to class numeric
+dat_num <- dat_ts %>% 
+  mutate(val= as.numeric(as.character(dat_ts$Value))) %>% 
+  mutate(COR = as.character(COR), origin = as.character(origin), pop= as.character(pop)) %>% 
+  select("year", "COR", "origin", "pop", "val")
+
+#loading the data "Demographics" and coercing it to the proper class
+b <- read.csv("unhcr_demographics.csv", skip=3)
+bb <- b %>% mutate(f_0.4=as.numeric(as.character(b$Female.0.4)), m_0.4=as.numeric(as.character(b$Male.0.4)), f_5.11=as.numeric(as.character(b$Female.5.11)), f_12.17=as.numeric(as.character(b$Female.12.17)), m_5.11=as.numeric(as.character(b$Male.5.11)), m_12.17=as.numeric(as.character(b$Male.12.17)), f.5.17=as.numeric(as.character(b$Female.5.17)), m.5.17=as.numeric(as.character(b$Male.5.17)), f_18.59=as.numeric(as.character(b$Female.18.59)), m_18.59=as.numeric(as.character(b$Male.18.59)), f_60=as.numeric(as.character(b$Female.60.)), m_60=as.numeric(as.character(b$Male.60.)), f_unknown=as.numeric(as.character(b$F..Unknown)), m_unknown=as.numeric(as.character(b$M..Unknown)), f_total=as.numeric(as.character(b$F..Total)), m_total=as.numeric(as.character(b$M..Total)))
+bb[is.na(bb)] <- 0
+
+#creating new variables, on number of people by age group and refugees aged 5 to 17
+demographics <- bb %>% mutate(f_5.17=f.5.17+f_5.11+f_12.17, m_5.17=m.5.17+m_5.11+m_12.17, all_0.4=f_0.4+m_0.4, all_5.17=f_5.17+m_5.17, all_18.59=f_18.59+m_18.59, all_60=f_60+m_60, all_unknown=f_unknown+m_unknown, total=m_total+f_total, minors=all_5.17+all_0.4) %>% select(-f_5.11, -f_12.17, -m_5.11, -f_12.17, -M..Total, -Male.5.11, -Male.12.17, -Female.12.17, -Female.5.11,  -F..Total, -M..Unknown, -F..Unknown, -Female.0.4, -Male.0.4, -Female.5.17, -Male.5.17, -Female.18.59, -Male.18.59, -Female.60., -Male.60., -f.5.17, -m.5.17)
+
+country_demographics <- demographics %>% group_by(Country...territory.of.asylum.residence, Year) %>% summarise(minors=sum(minors), f_0.4=sum(f_0.4), m_0.4=sum(m_0.4), f_5.17=sum(f_5.17), m_5.17=sum(m_5.17), f_18.59=sum(f_18.59), m_18.59=sum(m_18.59), f_60=sum(f_60), m_60=sum(m_60), f_unknown=sum(f_unknown), m_unknown=sum(m_unknown), f_total=sum(f_total), m_total=sum(m_total), all_0.4=sum(all_0.4), all_5.17=sum(all_5.17), all_18.59=sum(all_18.59), all_60=sum(all_60), all_unknown=sum(all_unknown), total=f_total+m_total)
+
+
+#renaming the columns
+names(country_demographics) <- c("Country", "Year", "minors", "f_0.4", "m_0.4", "f_5.17", "m_5.17", "f_18.59", "m_18.59", "f_60", "m_60", "f_unknown", "m_unknown", "f_total", "m_total", "all_0.4", "all_5.17", "all_18.59", "all_60", "all_unknown", "total")
+
+#cleaning dataset on asylum applications
+applications <- read.csv("unhcr_asylum_seekers.csv", skip=3) %>% filter(Year!=2000)
+names(applications) <- c("Year", "Country", "Origin", "procedtype", "pendingstart", "UNassisted", "appduring", "decrecog", "decother", "rejected", "otherclosed", "totdec", "pendingend", "totUNassisted")
+
+num_applications <- applications %>% transform(pendingstart= as.numeric(pendingstart), UNassisted= as.numeric(UNassisted), appduring= as.numeric(appduring), decrecog= as.numeric(decrecog), decother=as.numeric(decother), rejected= as.numeric(rejected), otherclosed= as.numeric(otherclosed), totdec= as.numeric(totdec), pendingend= as.numeric(pendingend), totUNassisted= as.numeric(totUNassisted))
+```
+
+##II. Exploratory Data Analysis
+
+Before conducting any empirical analysis, we wanted to examine the general trends in refugee flows. The Time Series dataset from UNHCR contains information about a variety of persons seeking international protection, including refugees, asylum seekers, internally-displaced persons and so on, reaching back to 1951. This information is displayed by year, country of current residence and country of origin. 
+
+To identify where refugee flows are originating, we filtered this data for just statistics on the number of refugees, and generated a geographic "region" variable to sort each country of origin into. We then grouped the refugee statistics by the region of origin and year. The figure below shows how the number of refugees from each global region has changed over time.
+
+```{r echo=FALSE, warning= FALSE, message= FALSE}
+#filtering the data for refugee statistics
+dat_refugee <- dat_num %>% 
+  filter(pop == "Refugees (incl. refugee-like situations)") %>%
+  group_by(year, origin) %>%
+  summarize(value= sum(val))
+
+
+#sorting countries into a specific world region
+dat_world_refugee <- dat_refugee %>% 
+  mutate(region_1= ifelse(origin == "Bhutan"| origin == "China"| origin == "China, Hong Kong SAR" | origin == "China, Macao SAR"| origin == "Dem. People's Rep. of Korea" | origin == "Japan"| origin == "Kazakhstan"| origin == "Kyrgyzstan"| origin == "Mongolia"| origin == "Nepal"| origin == "Rep. of Korea"| origin == "Tajikistan"| origin == "Tibetan"| origin == "Turkmenistan"| origin == "Uzbekistan", "North Asia", origin), 
+         region_2= ifelse(origin == "Bangladesh"| origin == "Brunei Darussalam"| origin == "Cambodia"| origin == "India"| origin == "Indonesia"| origin == "Lao People's Dem. Rep."| origin == "Malaysia"| origin == "Maldives"| origin == "Myanmar"| origin == "Philippines"| origin == "Singapore"| origin == "Sri Lanka"| origin == "Thailand"| origin == "Viet Nam", "South Asia", region_1), 
+         region_3= ifelse(origin == "Afghanistan"| origin == "Bahrain"| origin == "Iran (Islamic Rep. of)"| origin == "Iraq"| origin == "Israel"| origin == "Jordan"| origin == "Kuwait"| origin == "Lebanon"| origin == "Oman"| origin == "Pakistan"| origin == "Palestinian"| origin == "Qatar"| origin == "Saudi Arabia"| origin == "Syrian Arab Rep."| origin == "Turkey"| origin == "United Arab Emirates"| origin == "Yemen", "Middle East", region_2), 
+         region_4= ifelse(origin == "Andorra"| origin == "Austria"| origin == "Belgium"| origin == "Denmark"| origin == "Estonia"| origin == "Finland"| origin == "France"| origin == "Germany"| origin == "Gibraltar"| origin == "Holy See (the)"| origin == "Iceland"| origin == "Ireland"| origin == "Italy"| origin == "Latvia"| origin == "Liechtenstein"| origin == "Lithuania"| origin == "Luxembourg"| origin == "Malta"| origin == "Monaco"| origin == "Netherlands"| origin == "Norway"| origin == "Portugal"| origin == "San Marino"| origin == "Spain"| origin == "Svalbard and Jan Mayen"| origin == "Sweden"| origin == "Switzerland"| origin == "United Kingdom", "Western Europe", region_3), 
+         region_5= ifelse(origin == "Albania"| origin == "Armenia"| origin == "Azerbaijan"| origin == "Belarus"| origin == "Bosnia and Herzegovina"| origin == "Bulgaria"| origin == "Croatia"| origin == "Cyprus"| origin == "Czech Rep."| origin == "Georgia"| origin == "Greece"| origin == "Hungary"| origin == "Montenegro"| origin == "Poland"| origin == "Rep. of Moldova"| origin == "Romania"| origin == "Russian Federation"| origin == "Serbia and Kosovo (S/RES/1244 (1999))"| origin == "Slovakia"| origin == "Slovenia"| origin == "The former Yugoslav Republic of Macedonia"| origin == "Ukraine", "Eastern Europe", region_4), 
+         region_6= ifelse(origin == "Algeria"| origin == "Angola"| origin == "Benin"| origin == "Botswana"| origin == "Burkina Faso"| origin == "Burundi"| origin == "Cabo Verde"| origin == "Cameroon"| origin == "Central African Rep."| origin == "Chad"| origin == "Comoros"| origin == "Congo"| origin == "Côte d'Ivoire"| origin == "Dem. Rep. of the Congo"| origin == "Djibouti"| origin == "Egypt"| origin == "Equatorial Guinea"| origin == "Eritrea"| origin == "Ethiopia"| origin == "Gabon"| origin == "Gambia"| origin == "Ghana"| origin == "Guinea"| origin == "Guinea-Bissau"| origin == "Kenya"| origin == "Lesotho"| origin == "Liberia"| origin == "Libya"| origin == "Madagascar"| origin == "Malawi"| origin == "Mali"| origin == "Mauritania"| origin == "Mauritius"| origin ==  "Morocco"| origin == "Mozambique"| origin == "Namibia"| origin == "Niger"| origin == "Nigeria"| origin == "Rwanda"| origin == "Sao Tome and Principe"| origin == "Senegal"| origin == "Seychelles"| origin == "Sierra Leone"| origin == "Somalia"| origin == "South Africa"| origin == "South Sudan"| origin == "Sudan"| origin == "Swaziland"| origin == "Togo"| origin == "Tunisia"| origin == "Uganda"| origin == "United Rep. of Tanzania"| origin == "Western Sahara"| origin == "Zambia"| origin == "Zimbabwe", "Africa", region_5), 
+         region_7= ifelse(origin == "American Samoa"| origin == "Australia"| origin == "Cook Islands"| origin == "Fiji"| origin == "French Polynesia"| origin == "Kiribati"| origin == "Marshall Islands"| origin == "Micronesia (Federated States of)"| origin == "Nauru"| origin == "New Caledonia"| origin == "New Zealand"| origin == "Niue"| origin == "Norfolk Island"| origin == "Palau"| origin == "Papua New Guinea"| origin == "Samoa"| origin == "Solomon Islands"| origin == "Timor-Leste"| origin == "Tonga"| origin == "Tuvalu"| origin == "Vanuatu"| origin == "Wallis and Futuna Islands ", "Australia and Oceania", region_6), 
+         region_8= ifelse(origin == "Anguilla"| origin == "Antigua and Barbuda"| origin == "Aruba"| origin == "Bahamas"| origin == "Barbados"| origin == "Belize"| origin == "Bermuda"| origin == "British Virgin Islands"| origin == "Cayman Islands"| origin == "Costa Rica"| origin == "Cuba"| origin == "Curaçao"| origin == "Dominica"| origin == "Dominican Rep."| origin == "El Salvador"| origin == "Grenada"| origin == "Guadeloupe"| origin == "Guatemala"| origin == "Haiti"| origin == "Honduras"| origin == "Jamaica"| origin == "Martinique"| origin == "Mexico"| origin == "Nicaragua"| origin == "Panama"| origin == "Puerto Rico"| origin == "Saint Kitts and Nevis"| origin == "Saint Lucia"| origin == "Saint Vincent and the Grenadines"| origin == "Trinidad and Tobago"| origin == "Turks and Caicos Islands", "Central America and Caribbean", region_7),
+         region_9= ifelse(origin == "Canada"| origin == "Saint-Pierre-et-Miquelon"| origin == "United States of America", "North America", region_8),
+         region_10= ifelse(origin == "Argentina"| origin == "Bolivia (Plurinational State of)"| origin == "Brazil"| origin == "Chile"| origin == "Colombia"| origin == "Ecuador"| origin == "French Guiana"| origin == "Guyana"| origin == "Paraguay"| origin == "Peru"| origin == "Suriname"| origin == "Uruguay"| origin == "Venezuela (Bolivarian Republic of)", "South America", region_9),
+         region= ifelse(origin == "Stateless"| origin == "Various/Unknown", "Stateless/Unknown", region_10)) %>% 
+  select(year, region, origin, value)
+
+#collapsing data into regions
+dat_world_regions <- dat_world_refugee %>% 
+  group_by(region, year) %>% 
+  summarize(Value= sum(value))
+
+#plot of the number of refugees per world region, over time
+world_reg_refugees <- ggplot(dat_world_regions, mapping= aes(x= year, y= Value))+geom_smooth(mapping= aes(color= region), se= FALSE)+labs(x= "Year", y= "Number of Refugees", title= "Refugee flows by geographical region", caption= "Source: UNHCR Population Statistics")
+
+world_reg_refugees
+```
+
+This graph shows that many regions have not, in fact, been the source of a high number of refugees in the past few decades. As one might expect, these regions are North America, Western Europe, Australia and Oceania, but also Central America and the Caribbean, North Asia (the post-Soviet states, China, Japan and the Koreas) and South America. You can see that the number of refugees from Eastern Europe climbed during the 1990's, when the region was experiencing military conflict and political turbulence, but it steadily decreases from 1999 on. The two regions sending (by far) the highest number of refugees are Africa and the Middle East. These two regions started with similar patters, both increasing steeply from 1960 to 1990 and dropping off thereafter. Around 2001, the number of refugees from the Middle East begins to radically increase again, no doubt due to the military conflicts and political turbulance that started after September 11, 2001 and has continued to this day.   
+
+We wanted to look deeper in the data to focus specifically on these two areas with higher refugee flows. To accomplish this, we sorted countries into sub-regions and grouped the data at this level. The graph below is similar to the first, showing the number of refugees per sub-region, from 1960 until 2016.  
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+#filtering into sub-regions
+sub_regional_dat <- dat_world_refugee %>% 
+  filter(region== "Africa"|region== "Middle East") %>% 
+  mutate(sub_region_1= ifelse(origin == "Algeria"| origin ==  "Egypt"| origin ==  "Libya"| origin ==  "Morocco"| origin ==  "Tunisia"| origin ==  "Western Sahara", "North Africa", origin), 
+         sub_region_2= ifelse(origin == "Chad"| origin ==  "Mali"| origin ==  "Mauritania"| origin ==  "Niger"| origin ==  "Sudan", "Sahel", sub_region_1),
+         sub_region_3= ifelse(origin == "Benin"| origin ==  "Burkina Faso"| origin ==  "Cabo Verde"| origin ==  "Côte d'Ivoire"| origin ==  "Gambia"| origin ==  "Ghana"| origin ==  "Guinea"| origin ==  "Guinea-Bissau"| origin ==  "Liberia"| origin ==  "Nigeria"| origin ==  "Senegal"| origin ==  "Sierra Leone"| origin ==  "Togo", "West Africa", sub_region_2), 
+         sub_region_4= ifelse(origin == "Angola"| origin == "Cameroon"| origin ==  "Central African Rep."| origin ==  "Congo"| origin ==  "Dem. Rep. of the Congo"| origin ==  "Equatorial Guinea"| origin ==  "Gabon"| origin ==  "Sao Tome and Principe"| origin ==  "South Sudan", "Central Africa", sub_region_3), 
+         sub_region_5= ifelse(origin== "Burundi"| origin ==  "Comoros"| origin ==  "Djibouti"| origin ==  "Eritrea"| origin ==  "Ethiopia"| origin ==  "Kenya"| origin ==  "Madagascar"| origin ==  "Mauritius"| origin ==  "Rwanda"| origin ==  "Seychelles"| origin ==  "Somalia"| origin ==  "Uganda"| origin ==  "United Rep. of Tanzania", "East Africa", sub_region_4),
+         sub_region_6= ifelse(origin == "Botswana"| origin ==  "Lesotho"| origin ==  "Malawi"| origin ==  "Mozambique"| origin ==  "Namibia"| origin ==  "South Africa"| origin ==  "Swaziland"| origin ==  "Zambia"| origin ==  "Zimbabwe", "Southern Africa", sub_region_5), 
+         sub_region_7= ifelse(origin == "Afghanistan"| origin == "Iran (Islamic Rep. of)"| origin == "Iraq"| origin == "Pakistan", "Far East", sub_region_6),
+         sub_region_8= ifelse(origin == "Bahrain"| origin == "Kuwait"| origin == "Oman"| origin == "Qatar"| origin == "Saudi Arabia"| origin == "United Arab Emirates"| origin == "Yemen", "Arabian Peninsula", sub_region_7), 
+         sub_region= ifelse(origin == "Israel"| origin == "Jordan"| origin == "Lebanon"| origin == "Palestinian" |origin == "Syrian Arab Rep."| origin == "Turkey", "Near East", sub_region_8)) %>% 
+  select(year, region, sub_region, origin, value)
+
+#collapsing the data into sub-regions
+as_sub_regional <- sub_regional_dat %>% 
+  group_by(region, sub_region, year) %>% 
+  summarize(Value= sum(value))
+
+#plotting number of refugees by sub-region of Africa
+Afr_reg_refugees <- ggplot(as_sub_regional, mapping= aes(x= year, y= Value))+geom_smooth(mapping= aes(color= sub_region), se= FALSE)+facet_wrap(~region)+labs(x= "Year", y="Number of Refugees", title= "Refugee flows by Sub-Region", caption= "Source: UNHCR Population Statistics")
+Afr_reg_refugees
+
+```
+
+We can see that very few refugees come from North Africa during this period. Refugees from Southern and West Africa follow similar trends, rising to a peak during the 1980's and 1990's (respectively), then dropping back to a negligible number. Refugees from the Sahel region and from Central Africa both show a general upwards trend since 1960. The most prominent sub-region in Africa, with by far the highest number of refugees is East Africa. This region includes countries like Somolia, Eritrea, Ethiopia, Rwanda and Uganda, all countries that have struggled with military conflicts, political turbulence and dire living standards throughout the past few decades.
+
+This being said, the overall numbers coming from sub-regions in Africa are quite frankly dwarfed by the number coming from the Middle East. Those coming from the Far East (Afghanistan, Pakistan, Iraq and Iran) are the most numerous of all. In recent years, the number coming from the Near East (Palestine, Syia, Turkey, Lebanon etc.) have spiked sharply. Very few refugees come from the countries of the Arabian Peninsula.
+
+Overall, the global data shows that many refugees are coming from the Middle East and Africa. The question is, where are these asylum seekers going? 
+
+##III. Empirical Analysis
+
+Our empirical analysis revolves around two assuptions. Firstly, we think that families are most likely to stick close to their country of origin. Long travels may be harder to face for minors. Therefore, minors should compose a large proportion of the refugee populations near areas with a high refugee flow. Moreover, if minors are concentrated in particular areas of the world, we think that the UNHCR would be more active in those areas to assist with applications, since children and teenagers are not as autonomous as adults and families with young children are priorities in the asylum system. Thus, we expect to see a high proportion of minor asylum-seekers in areas close to high-outflow regions of the globe, and to find a positive relation between the proportion of minor asylum seekers in a region and UN assisted applications.  
+
+The Asylum Seekers table contains data on the decisions made on asylum applications, based on the country of arrival, of origin and the year. We also have demographic data, which might play an important role here. We therefore merged these two tables, using country of residence and year as keys for the merge. For the purpose of creating an interactive map, we added country codes to the dataset. The map (which can be viewed in the HTML version of the document) shows the proportion of total refugees in each country that are minors.
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+#eliminating the grouping by country of origin
+appl <- num_applications %>% group_by(Country, Year) %>% summarise(pendingstart=sum(pendingstart), UNassisted=sum(UNassisted), appduring=sum(appduring), decrecog=sum(decrecog), decother=sum(decother), rejected=sum(rejected), otherclosed=sum(otherclosed), totdec=sum(totdec), pendingend=sum(pendingend), totUNassisted=sum(totUNassisted))
+
+#joined dataset
+country_data <- merge(x=appl, y=country_demographics, all=TRUE)
+
+#adding country codes
+code<- read.csv('https://raw.githubusercontent.com/plotly/datasets/master/2014_world_gdp_with_codes.csv') %>% select(-GDP..BILLIONS.)
+names(code) <- c("Country", "Code")
+full_data <- plyr::join(code, country_data, by= "Country", type= "inner") %>% mutate(minor_pro= minors/total*100, totappl=pendingend+totdec, assisted_pro=totUNassisted/totappl*100)
+
+#map
+minor_data <- full_data %>%
+  select("Country", "Code", "Year", "minors","minor_pro", "total", "assisted_pro") 
+l <- list(color = toRGB("grey"), width = 1) 
+g <- list( showframe = FALSE, showcoastlines = TRUE, projection = list(type = 'Mercator') ) 
+minors_map <- plot_geo(minor_data) %>% 
+  add_trace(z= ~minor_pro, color= ~minor_pro, colors= 'Blues', frame= ~Year, text=~Country, locations=~Code, marker = list(line = l) ) %>% 
+  colorbar(title = 'Percent of Minor Refugees') %>% 
+  layout(title='Minor Refugees per Country', geo = g)
+minors_map
+```
+
+The map supports our first hypothesis: a higher proportion of minors are located within refugee populations in Africa and the Middle East, areas where most migrants are coming from. Over the years, countries with a consistently high population of minor asylum seekers are Afghanistan, Pakistan, Chad, Somalia and Ethiopia. With relation to our second hypothesis, we wanted to see if this was reflected in a more active role of the UNHCR in assisting with applications. We first explored the data using a scattered plot. 
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+world_data_regions <- full_data %>% 
+  mutate(region_1= ifelse(Country == "Bhutan"| Country == "China"| Country == "China, Hong Kong SAR" | Country == "China, Macao SAR"| Country == "Dem. People's Rep. of Korea" | Country == "Japan"| Country == "Kazakhstan"| Country == "Kyrgyzstan"| Country == "Mongolia"| Country == "Nepal"| Country == "Rep. of Korea"| Country == "Tajikistan"| Country == "Tibetan"| Country == "Turkmenistan"| Country == "Uzbekistan", "North Asia", Country), 
+         region_2= ifelse(Country == "Bangladesh"| Country == "Brunei Darussalam"| Country == "Cambodia"| Country == "India"| Country == "Indonesia"| Country == "Lao People's Dem. Rep."| Country == "Malaysia"| Country == "Maldives"| Country == "Myanmar"| Country == "Philippines"| Country == "Singapore"| Country == "Sri Lanka"| Country == "Thailand"| Country == "Viet Nam", "South Asia", region_1), 
+         region_3= ifelse(Country == "Afghanistan"| Country == "Bahrain"| Country == "Iran (Islamic Rep. of)"| Country == "Iraq"| Country == "Israel"| Country == "Jordan"| Country == "Kuwait"| Country == "Lebanon"| Country == "Oman"| Country == "Pakistan"| Country == "Palestinian"| Country == "Qatar"| Country == "Saudi Arabia"| Country == "Syrian Arab Rep."| Country == "Turkey"| Country == "United Arab Emirates"| Country == "Yemen", "Middle East", region_2), 
+         region_4= ifelse(Country == "Andorra"| Country == "Austria"| Country == "Belgium"| Country == "Denmark"| Country == "Estonia"| Country == "Finland"| Country == "France"| Country == "Germany"| Country == "Gibraltar"| Country == "Holy See (the)"| Country == "Iceland"| Country == "Ireland"| Country == "Italy"| Country == "Latvia"| Country == "Liechtenstein"| Country == "Lithuania"| Country == "Luxembourg"| Country == "Malta"| Country == "Monaco"| Country == "Netherlands"| Country == "Norway"| Country == "Portugal"| Country == "San Marino"| Country == "Spain"| Country == "Svalbard and Jan Mayen"| Country == "Sweden"| Country == "Switzerland"| Country == "United Kingdom", "Western Europe", region_3), 
+         region_5= ifelse(Country == "Albania"| Country == "Armenia"| Country == "Azerbaijan"| Country == "Belarus"| Country == "Bosnia and Herzegovina"| Country == "Bulgaria"| Country == "Croatia"| Country == "Cyprus"| Country == "Czech Rep."| Country == "Georgia"| Country == "Greece"| Country == "Hungary"| Country == "Montenegro"| Country == "Poland"| Country == "Rep. of Moldova"| Country == "Romania"| Country == "Russian Federation"| Country == "Serbia and Kosovo (S/RES/1244 (1999))"| Country == "Slovakia"| Country == "Slovenia"| Country == "The former Yugoslav Republic of Macedonia"| Country == "Ukraine", "Eastern Europe", region_4), 
+         region_6= ifelse(Country == "Algeria"| Country == "Angola"| Country == "Benin"| Country == "Botswana"| Country == "Burkina Faso"| Country == "Burundi"| Country == "Cabo Verde"| Country == "Cameroon"| Country == "Central African Rep."| Country == "Chad"| Country == "Comoros"| Country == "Congo"| Country == "Côte d'Ivoire"| Country == "Dem. Rep. of the Congo"| Country == "Djibouti"| Country == "Egypt"| Country == "Equatorial Guinea"| Country == "Eritrea"| Country == "Ethiopia"| Country == "Gabon"| Country == "Gambia"| Country == "Ghana"| Country == "Guinea"| Country == "Guinea-Bissau"| Country == "Kenya"| Country == "Lesotho"| Country == "Liberia"| Country == "Libya"| Country == "Madagascar"| Country == "Malawi"| Country == "Mali"| Country == "Mauritania"| Country == "Mauritius"| Country ==  "Morocco"| Country == "Mozambique"| Country == "Namibia"| Country == "Niger"| Country == "Nigeria"| Country == "Rwanda"| Country == "Sao Tome and Principe"| Country == "Senegal"| Country == "Seychelles"| Country == "Sierra Leone"| Country == "Somalia"| Country == "South Africa"| Country == "South Sudan"| Country == "Sudan"| Country == "Swaziland"| Country == "Togo"| Country == "Tunisia"| Country == "Uganda"| Country == "United Rep. of Tanzania"| Country == "Western Sahara"| Country == "Zambia"| Country == "Zimbabwe", "Africa", region_5), 
+         region_7= ifelse(Country == "American Samoa"| Country == "Australia"| Country == "Cook Islands"| Country == "Fiji"| Country == "French Polynesia"| Country == "Kiribati"| Country == "Marshall Islands"| Country == "Micronesia (Federated States of)"| Country == "Nauru"| Country == "New Caledonia"| Country == "New Zealand"| Country == "Niue"| Country == "Norfolk Island"| Country == "Palau"| Country == "Papua New Guinea"| Country == "Samoa"| Country == "Solomon Islands"| Country == "Timor-Leste"| Country == "Tonga"| Country == "Tuvalu"| Country == "Vanuatu"| Country == "Wallis and Futuna Islands ", "Australia and Oceania", region_6), 
+         region_8= ifelse(Country == "Anguilla"| Country == "Antigua and Barbuda"| Country == "Aruba"| Country == "Bahamas"| Country == "Barbados"| Country == "Belize"| Country == "Bermuda"| Country == "British Virgin Islands"| Country == "Cayman Islands"| Country == "Costa Rica"| Country == "Cuba"| Country == "Curaçao"| Country == "Dominica"| Country == "Dominican Rep."| Country == "El Salvador"| Country == "Grenada"| Country == "Guadeloupe"| Country == "Guatemala"| Country == "Haiti"| Country == "Honduras"| Country == "Jamaica"| Country == "Martinique"| Country == "Mexico"| Country == "Nicaragua"| Country == "Panama"| Country == "Puerto Rico"| Country == "Saint Kitts and Nevis"| Country == "Saint Lucia"| Country == "Saint Vincent and the Grenadines"| Country == "Trinidad and Tobago"| Country == "Turks and Caicos Islands", "Central America and Caribbean", region_7),
+         region_9= ifelse(Country == "Canada"| Country == "Saint-Pierre-et-Miquelon"| Country == "United States of America", "North America", region_8),
+         region_10= ifelse(Country == "Argentina"| Country == "Bolivia (Plurinational State of)"| Country == "Brazil"| Country == "Chile"| Country == "Colombia"| Country == "Ecuador"| Country == "French Guiana"| Country == "Guyana"| Country == "Paraguay"| Country == "Peru"| Country == "Suriname"| Country == "Uruguay"| Country == "Venezuela (Bolivarian Republic of)", "South America", region_9),
+         region= ifelse(Country == "Stateless"| Country == "Various/Unknown", "Stateless/Unknown", region_10)) %>% 
+  select("Country", "Code", "Year", "minor_pro", "assisted_pro", "region")
+
+
+correlation_world <- ggplot(data= world_data_regions, mapping= aes(x= minor_pro, y= assisted_pro))+geom_point(mapping= aes(color= region))+geom_smooth()+labs(x= "Proportion of Minors", y="Proportion of UN Assisted Applications", title= "Proportion of Minors vs UN Asylum Application Assistance: Global data")
+correlation_world
+```
+
+The trend seems to show a positive correlation between these two variables, even if its explanatory power may not be strong. We then ran a regression to check this hypothesis, regressing the proportion of minors in the country on the proportion of UN assisted applications in the same region.
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+dec_factors_world <- lm(data= full_data, assisted_pro~minor_pro)
+summary(dec_factors_world)
+```
+
+The regression results show that the proportion of minor refugees indeed has a positive, statistically significant influence on the proportion of applications assisted by the UN (though the effect size is small). 
+
+However, we believed that this effect would be even more pronounced in Africa and the Middle East, areas where we have seen the proportion of minors seeking asylum to be highest. What emerges from the scattered plot above is that these two regions are also the ones with the highest support in applications from the UN. Therefore we ran the same analysis using only observations coming from the Middle East and Africa. 
+
+Dividing the observations into two geographic regions helps us also with outliers. Statistical analysis performed on the whole world may be too general, not accounting for the diversified nature of geographical and political structures.
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+#creating a new dataset, a subset of full_data
+a <- sub_regional_dat %>% select(origin, sub_region)
+names(a) <- c("year", "Country", "sub_region")
+
+high_volume_refugees <- full_data %>%
+  mutate(sub_region_1= ifelse(Country == "Algeria"| Country ==  "Egypt"| Country ==  "Libya"| Country ==  "Morocco"| Country ==  "Tunisia"| Country ==  "Western Sahara", "North Africa", Country), sub_region_2= ifelse(Country == "Chad"| Country ==  "Mali"| Country ==  "Mauritania"| Country ==  "Niger"| Country ==  "Sudan", "Sahel", sub_region_1), sub_region_3= ifelse(Country == "Benin"| Country ==  "Burkina Faso"| Country ==  "Cabo Verde"| Country ==  "Côte d'Ivoire"| Country ==  "Gambia"| Country ==  "Ghana"| Country ==  "Guinea"| Country ==  "Guinea-Bissau"| Country ==  "Liberia"| Country ==  "Nigeria"| Country ==  "Senegal"| Country ==  "Sierra Leone"| Country ==  "Togo", "West Africa", sub_region_2), sub_region_4= ifelse(Country == "Angola"| Country == "Cameroon"| Country ==  "Central African Rep."| Country ==  "Congo"| Country ==  "Dem. Rep. of the Congo"| Country ==  "Equatorial Guinea"| Country ==  "Gabon"| Country ==  "Sao Tome and Principe"| Country ==  "South Sudan", "Central Africa", sub_region_3), sub_region_5= ifelse(Country== "Burundi"| Country ==  "Comoros"| Country ==  "Djibouti"| Country ==  "Eritrea"| Country ==  "Ethiopia"| Country ==  "Kenya"| Country ==  "Madagascar"| Country ==  "Mauritius"| Country ==  "Rwanda"| Country ==  "Seychelles"| Country ==  "Somalia"| Country ==  "Uganda"| Country ==  "United Rep. of Tanzania", "East Africa", sub_region_4), sub_region_6= ifelse(Country == "Botswana"| Country ==  "Lesotho"| Country ==  "Malawi"| Country ==  "Mozambique"| Country ==  "Namibia"| Country ==  "South Africa"| Country ==  "Swaziland"| Country ==  "Zambia"| Country ==  "Zimbabwe", "Southern Africa", sub_region_5), sub_region_7= ifelse(Country == "Afghanistan"| Country == "Iran (Islamic Rep. of)"| Country == "Iraq"| Country == "Pakistan", "Far East", sub_region_6),
+         sub_region_8= ifelse(Country == "Bahrain"| Country == "Kuwait"| Country == "Oman"| Country == "Qatar"| Country == "Saudi Arabia"| Country == "United Arab Emirates"| Country == "Yemen", "Arabian Peninsula", sub_region_7), sub_region= ifelse(Country == "Israel"| Country == "Jordan"| Country == "Lebanon"| Country == "Palestinian" |Country == "Syrian Arab Rep."| Country == "Turkey", "Near East", sub_region_8)) %>% 
+  select("Country", "Code", "Year", "minor_pro", "assisted_pro", "sub_region") %>% 
+  filter(sub_region== "North Africa"| sub_region== "Sahel"| sub_region == "East Africa"| sub_region== "West Africa"| sub_region== "Central Africa"| sub_region == "Southern Africa"|sub_region == "Far East"| sub_region == "Near East"| sub_region == "Arabian Peninsula")
+
+correlation_high_volume <- ggplot(data= high_volume_refugees, mapping= aes(x= minor_pro, y= assisted_pro))+geom_point(mapping= aes(color= sub_region))+geom_smooth()+labs(x= "Proportion of Minors", y="Proportion of UN Assisted Applications", title= "Proportion of Minors vs UN Asylum Application Assistance: High Volume Regions")
+correlation_high_volume
+```
+
+When limiting our data to high-volume regions, the correlation between the proportion of minor refugees and the proportion of UN assisted applications seems to be stronger. In the scattered plot, two regions are noticeable: Northern Africa has a low number of refugees and low support, the opposite can be said for Southern Africa. 
+Outliers do not seem to be an issue. Here are the results of the regression:
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+dec_factors_high_vol_regions <- lm(data= high_volume_refugees, assisted_pro~minor_pro)
+summary(dec_factors_high_vol_regions)
+```
+
+This second regression produces a significant estimate, whose value is slightly higher than the previous estimate on the global data. 
+
+We now checked if this correlation is similar for low-volume regions of the world.
+
+```{r echo= FALSE, warning= FALSE, message= FALSE}
+low_volume_refugees <- full_data %>% 
+  filter(Country != "Algeria"& Country !=  "Angola"& Country !=  "Benin"& Country !=  "Botswana"& Country !=  "Burkina Faso"& Country !=  "Burundi"& Country !=  "Cabo Verde"& Country !=  "Cameroon"& Country !=  "Central African Rep."& Country !=  "Chad"& Country !=  "Comoros"& Country !=  "Congo"& Country !=  "Côte d'Ivoire"& Country !=  "Dem. Rep. of the Congo"& Country !=  "Djibouti"& Country !=  "Egypt"& Country !=  "Equatorial Guinea"& Country !=  "Eritrea"& Country !=  "Ethiopia"& Country !=  "Gabon"& Country !=  "Gambia"& Country !=  "Ghana"& Country !=  "Guinea"& Country !=  "Guinea-Bissau"& Country !=  "Kenya"& Country !=  "Lesotho"& Country !=  "Liberia"& Country !=  "Libya"& Country !=  "Madagascar"& Country !=  "Malawi"& Country !=  "Mali"& Country !=  "Mauritania"& Country !=  "Mauritius"& Country !=   "Morocco"& Country !=  "Mozambique"& Country !=  "Namibia"& Country !=  "Niger"& Country !=  "Nigeria"& Country !=  "Rwanda"& Country !=  "Sao Tome and Principe"& Country !=  "Senegal"& Country !=  "Seychelles"& Country !=  "Sierra Leone"& Country !=  "Somalia"& Country !=  "South Africa"& Country !=  "South Sudan"& Country !=  "Sudan"& Country !=  "Swaziland"& Country !=  "Togo"& Country !=  "Tunisia"& Country !=  "Uganda"& Country !=  "United Rep. of Tanzania"& Country !=  "Western Sahara"& Country !=  "Zambia"& Country !=  "Zimbabwe"& Country != "Afghanistan"& Country != "Bahrain"& Country != "Iran (Islamic Rep. of)"& Country != "Iraq"& Country != "Israel"& Country != "Jordan"& Country != "Kuwait"& Country != "Lebanon"& Country != "Oman"& Country != "Pakistan"& Country != "Palestinian"& Country != "Qatar"& Country != "Saudi Arabia"& Country != "Syrian Arab Rep."& Country != "Turkey"& Country != "United Arab Emirates"& Country != "Yemen")
+
+correlation_low_volume <- ggplot(data= low_volume_refugees, mapping= aes(x= minor_pro, y= assisted_pro))+geom_point()+geom_smooth()
+correlation_low_volume
+
+dec_factors_low_vol_regions <- lm(data= low_volume_refugees, assisted_pro~minor_pro)
+summary(dec_factors_low_vol_regions)
+```
+
+We can see from the scattered plot that the correlation is not definite. The estimate in the regression confirm this hypothesis, which is negative but not statistically significant. 
+
+##IV. Discussion and Conclusion
+
+Our exploratory analysis and regression find that the UN is more active in countries where minors make up a high proportion of the migrant population. This effect is particularly true in the Middle East and Africa, where minors are present in high proportions. 
+
+One caveat to our analysis is that scattered plots show some heteroskedasticity. We need to consider the possibility of our estimates being slightly biased. No doubt, our models are not comlete, omitting many variables (not included in these datasets) which would impact the proportion of applications in an area that the UN assists with. Controlling for more variables would improve our R-squared and give more precise estamiates. 
+
+Moreover, the observations coming from countries with almost no assistance from the UN, or a low proportion of minors, may be a problem to our analysis. We decided to include them nevertheless, to not alter the dataset excessively.
